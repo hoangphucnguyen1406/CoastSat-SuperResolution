@@ -1,3 +1,10 @@
+"""
+This module contains all the functions needed to download the satellite images
+from the Google Earth Engine server
+
+Author: Kilian Vos, Water Research Laboratory, University of New South Wales
+"""
+
 
 # load basic modules
 import os
@@ -31,6 +38,13 @@ np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler('CPLQuietErrorHandler')
 
 def authenticate_and_initialize(project_name):
+    """
+    Authenticates and initializes the Earth Engine API.
+    This function handles the authentication and initialization process:
+        1. Try to use existing token to initialize
+        2. If 1 fails, try to refresh the token using Application Default Credentials
+        3. If 2 fails, authenticate manually via the web browser
+    """
     # first try to initialize connection with GEE server with existing token
     try: 
         ee.Initialize(project=project_name)
@@ -56,7 +70,49 @@ def authenticate_and_initialize(project_name):
             print('GEE initialized (manual authentication).')
             
 def retrieve_images(inputs):
-    
+    """
+    Downloads all images from Landsat 5, Landsat 7, Landsat 8, Landsat 9 and Sentinel-2
+    covering the area of interest and acquired between the specified dates.
+    The downloaded images are in .TIF format and organised in subfolders, divided
+    by satellite mission. The bands are also subdivided by pixel resolution.
+
+    KV WRL 2018
+
+    Arguments:
+    -----------
+    inputs: dict with the following keys
+        'sitename': str
+            name of the site
+        'polygon': list
+            polygon containing the lon/lat coordinates to be extracted,
+            longitudes in the first column and latitudes in the second column,
+            there are 5 pairs of lat/lon with the fifth point equal to the first point:
+            ```
+            polygon = [[[151.3, -33.7],[151.4, -33.7],[151.4, -33.8],[151.3, -33.8],
+            [151.3, -33.7]]]
+            ```
+        'dates': list of str
+            list that contains 2 strings with the initial and final dates in
+            format 'yyyy-mm-dd':
+            ```
+            dates = ['1987-01-01', '2018-01-01']
+            ```
+        'sat_list': list of str
+            list that contains the names of the satellite missions to include:
+            ```
+            sat_list = ['L5', 'L7', 'L8', 'S2']
+            ```
+        'filepath_data': str
+            filepath to the directory where the images are downloaded
+
+    Returns:
+    -----------
+    metadata: dict
+        contains the information about the satellite images that were downloaded:
+        date, filename, georeferencing accuracy and image coordinate reference system
+
+    """
+
     # check image availabiliy and retrieve list of images
     im_dict_T1, im_dict_T2 = check_images_available(inputs)
 
@@ -99,7 +155,6 @@ def retrieve_images(inputs):
         bands_id = bands_dict[satname]
         
         all_names = [] # list for detecting duplicates
-        
         # loop through each image
         for i in range(len(im_dict_T1[satname])):
             
@@ -141,7 +196,10 @@ def retrieve_images(inputs):
                 
             # get geometric accuracy, radiometric quality and tilename for S2
             elif satname in ['S2']:
-
+                # Sentinel-2 products don't provide a georeferencing accuracy (RMSE as in Landsat)
+                # but they have a flag indicating if the geometric quality control was PASSED or FAILED
+                # if passed a value of 1 is stored if failed a value of -1 is stored in the metadata
+                # check which flag name is used for the image as it changes for some reason in the archive
                 flag_names = ['GEOMETRIC_QUALITY_FLAG', 'GEOMETRIC_QUALITY', 'quality_check', 'GENERAL_QUALITY_FLAG']
                 key = []
                 for key in flag_names: 
@@ -293,10 +351,8 @@ def retrieve_images(inputs):
                         im_fn[key] = im_date + '_' + satname + '_' + tilename + '_' \
                             + inputs['sitename'] + '_' + key \
                             + '_dup%d'%duplicate_counter + suffix
-                im_fn['mask'] = im_fn['ms'].replace('_ms','_mask')   
-                
-                filename_ms = im_fn["ms"]
-                
+                im_fn['mask'] = im_fn['ms'].replace('_ms','_mask')
+                filename_ms = im_fn['ms']
                 all_names.append(im_fn['ms']) 
                 
                 # resample the ms bands to the pan band with bilinear interpolation (for pan-sharpening later)
@@ -406,13 +462,44 @@ def retrieve_images(inputs):
     # once all images have been downloaded, load metadata from .txt files
     metadata = get_metadata(inputs)
     
+    # merge overlapping images (necessary only if the polygon is at the boundary of an image)
+    # if 'S2' in metadata.keys():
+    #     print("\n Called merge_overlapping_images\n")
+    #     try:
+    #         metadata = merge_overlapping_images(metadata,inputs)
+    #     except:
+    #         print('WARNING: there was an error while merging overlapping S2 images,'+
+    #               ' please open an issue on Github at https://github.com/kvos/CoastSat/issues'+
+    #               ' and include your script so we can find out what happened.')
+
+    # save metadata dict
     with open(os.path.join(im_folder, inputs['sitename'] + '_metadata' + '.pkl'), 'wb') as f:
         pickle.dump(metadata, f)
     print('Satellite images downloaded from GEE and save in %s'%im_folder)
     return metadata
 
 def get_metadata(inputs):
-    
+    """
+    Gets the metadata from the downloaded images by parsing .txt files located
+    in the \meta subfolder.
+
+    KV WRL 2018
+
+    Arguments:
+    -----------
+    inputs: dict with the following fields
+        'sitename': str
+            name of the site
+        'filepath_data': str
+            filepath to the directory where the images are downloaded
+
+    Returns:
+    -----------
+    metadata: dict
+        contains the information about the satellite images that were downloaded:
+        date, filename, georeferencing accuracy and image coordinate reference system
+
+    """
     # directory containing the images
     filepath = os.path.join(inputs['filepath'],inputs['sitename'])
     # initialize metadata dict
@@ -813,7 +900,7 @@ def download_tif(image, polygon, bands, filepath, satname):
             fn_image = os.path.join(filepath,filename)
             return fn_image           
 
-def warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method='cubic'):
+def warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method='bilinear'):
     """
     Resample an image on a new pixel grid based on a target image using gdal_warp.
     This is used to align the multispectral and panchromatic bands, as well as just downsample certain bands.
