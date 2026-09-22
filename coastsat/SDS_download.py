@@ -33,6 +33,7 @@ import time
 
 # CoastSat modules
 from coastsat import SDS_preprocess, SDS_tools, gdal_merge
+from super_resolution.bicubic import get_resampling_method
 
 np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler('CPLQuietErrorHandler')
@@ -112,6 +113,19 @@ def retrieve_images(inputs):
         date, filename, georeferencing accuracy and image coordinate reference system
 
     """
+
+    # select interpolation method for image resampling
+    sr_method = inputs.get('sr_method', 'bilinear').lower()
+
+    if sr_method == 'bilinear':
+        sr_resampling_method = 'bilinear'
+    elif sr_method == 'bicubic':
+        sr_resampling_method = get_resampling_method()
+    else:
+        raise ValueError(
+            f"Unknown sr_method: {sr_method}. "
+            "Available methods at the download stage are 'bilinear' and 'bicubic'."
+        )
 
     # check image availabiliy and retrieve list of images
     im_dict_T1, im_dict_T2 = check_images_available(inputs)
@@ -292,11 +306,11 @@ def retrieve_images(inputs):
                 filename_ms = im_fn['ms']
                 all_names.append(im_fn['ms'])
                 
-                # resample ms bands to 15m with bilinear interpolation
+                # resample ms bands to 15m with the selected interpolation method
                 fn_in = fn_ms
                 fn_target = fn_ms
                 fn_out = os.path.join(fp_ms, im_fn['ms'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method='bilinear')                
+                warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method=sr_resampling_method)                
                 
                 # resample QA band to 15m with nearest-neighbour interpolation
                 fn_in = fn_QA
@@ -355,11 +369,11 @@ def retrieve_images(inputs):
                 filename_ms = im_fn['ms']
                 all_names.append(im_fn['ms']) 
                 
-                # resample the ms bands to the pan band with bilinear interpolation (for pan-sharpening later)
+                # resample the ms bands to the pan band with the selected interpolation method (for pan-sharpening later)
                 fn_in = fn_ms
                 fn_target = fn_pan
                 fn_out = os.path.join(fp_ms, im_fn['ms'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='bilinear')             
+                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method=sr_resampling_method)             
                 
                 # resample QA band to the pan band with nearest-neighbour interpolation
                 fn_in = fn_QA
@@ -426,11 +440,11 @@ def retrieve_images(inputs):
                 filename_ms = im_fn['ms']
                 all_names.append(im_fn['ms']) 
                 
-                # resample the 20m swir band to the 10m ms band with bilinear interpolation
+                # resample the 20m swir band to the 10m ms band with the selected interpolation method
                 fn_in = fn_swir
                 fn_target = fn_ms
                 fn_out = os.path.join(fp_swir, im_fn['swir'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='bilinear')             
+                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method=sr_resampling_method)             
                 
                 # resample 60m QA band to the 10m ms band with nearest-neighbour interpolation
                 fn_in = fn_QA
