@@ -1,12 +1,3 @@
-"""
-Inference SRCNN 5-band cho Landsat 8/9.
-
-Mô hình được huấn luyện bằng bài toán tự giám sát:
-60 m giả lập -> bilinear 30 m -> SRCNN -> target 30 m.
-
-Trong CoastSat, mô hình được áp dụng thử nghiệm lên ảnh multispectral
-đã bilinear từ 30 m lên 15 m.
-"""
 
 from pathlib import Path
 
@@ -17,7 +8,7 @@ import torch.nn.functional as F
 
 
 class SRCNN5Band(nn.Module):
-    """SRCNN cổ điển cho ảnh Landsat 5 band."""
+    """SRCNN for Landsat 5 bandes."""
 
     def __init__(self):
         super().__init__()
@@ -57,7 +48,6 @@ _DEVICE = None
 
 
 def _get_model():
-    """Nạp model một lần rồi tái sử dụng cho các ảnh tiếp theo."""
     global _MODEL, _DEVICE
 
     if _MODEL is not None:
@@ -75,7 +65,7 @@ def _get_model():
 
     if not model_path.exists():
         raise FileNotFoundError(
-            f"Không tìm thấy model SRCNN L8/L9: {model_path}"
+            f"Do not find model SRCNN L8/L9: {model_path}"
         )
 
     try:
@@ -113,39 +103,22 @@ def _get_model():
 
 @torch.inference_mode()
 def enhance_l89(im_ms, reflect_pad=6):
-    """
-    Áp dụng SRCNN lên ảnh multispectral L8/L9.
-
-    Parameters
-    ----------
-    im_ms : numpy.ndarray
-        Ảnh CoastSat có dạng (H, W, 5).
-    reflect_pad : int
-        Số pixel reflect padding để tránh viền đen.
-
-    Returns
-    -------
-    numpy.ndarray
-        Ảnh SRCNN có cùng shape và dtype với ảnh đầu vào.
-    """
+   
     image = np.asarray(im_ms)
 
     if image.ndim != 3 or image.shape[2] != 5:
         raise ValueError(
-            "SRCNN L8/L9 yêu cầu ảnh dạng (H, W, 5), "
-            f"nhưng nhận được {image.shape}"
+            "SRCNN L8/L9 require (H, W, 5), "
+            f"but {image.shape}"
         )
 
     original_dtype = image.dtype
     image_float = image.astype(np.float32, copy=True)
 
-    # Ghi nhớ pixel không hợp lệ
     invalid_mask = ~np.isfinite(image_float).all(axis=2)
 
-    # Không truyền NaN/Inf vào mạng
     image_float[~np.isfinite(image_float)] = 0.0
 
-    # HWC -> NCHW
     tensor = (
         torch.from_numpy(
             np.moveaxis(image_float, -1, 0)
@@ -158,7 +131,6 @@ def enhance_l89(im_ms, reflect_pad=6):
 
     height, width = image_float.shape[:2]
 
-    # Reflect padding yêu cầu padding nhỏ hơn kích thước ảnh
     pad = min(
         int(reflect_pad),
         height - 1,
@@ -183,7 +155,6 @@ def enhance_l89(im_ms, reflect_pad=6):
     else:
         output = model(tensor)
 
-    # NCHW -> HWC
     enhanced = (
         output.squeeze(0)
         .cpu()
@@ -193,11 +164,10 @@ def enhance_l89(im_ms, reflect_pad=6):
 
     if enhanced.shape != image_float.shape:
         raise RuntimeError(
-            f"Sai kích thước SRCNN: "
+            f"Wrong size SRCNN: "
             f"{image_float.shape} -> {enhanced.shape}"
         )
 
-    # Giữ nguyên vùng nodata/không hợp lệ
     enhanced[invalid_mask] = image_float[invalid_mask]
 
     return enhanced.astype(original_dtype, copy=False)
