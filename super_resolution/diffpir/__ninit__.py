@@ -1,0 +1,1 @@
+from .diffpir_loader import load_precomputed_diffpir
