@@ -141,7 +141,7 @@ def retrieve_images(inputs):
     # Select the image reconstruction/resampling method.
     # Bilinear remains the default to preserve the original CoastSat behaviour.
     sr_method = str(inputs.get('sr_method', 'bilinear')).lower()
-    valid_sr_methods = {'bilinear', 'bicubic', 'zhao'}
+    valid_sr_methods = {'bilinear', 'bicubic', 'zhao', 'srcnn'}
     if sr_method not in valid_sr_methods:
         raise ValueError(
             f"Unknown sr_method: {sr_method}. "
@@ -149,6 +149,8 @@ def retrieve_images(inputs):
         )
 
     # Bilinear/Bicubic are direct GDAL resampling modes.
+    # SRCNN keeps the original CoastSat Bilinear resampling at the download
+    # stage; the learned enhancement is applied later in preprocessing.
     # Zhao has its own reconstruction step for Landsat; Bilinear is kept only
     # where a final grid alignment is required and for Sentinel-2.
     if sr_method == 'bicubic':
@@ -390,7 +392,7 @@ def retrieve_images(inputs):
                         f"{zhao_info['bicubic_forward_mse']:.8e}"
                     )
                 else:
-                    # Original CoastSat interpolation (bilinear) or Bicubic.
+                    # Original CoastSat Bilinear, SRCNN input preparation, or Bicubic.
                     warp_image_to_target(
                         fn_ms,
                         fn_out,
@@ -513,7 +515,7 @@ def retrieve_images(inputs):
                         f'\n  Grid: {grid_action}'
                     )
                 else:
-                    # Original CoastSat interpolation (bilinear) or Bicubic.
+                    # Original CoastSat Bilinear, SRCNN input preparation, or Bicubic.
                     warp_image_to_target(
                         fn_in,
                         fn_out,
