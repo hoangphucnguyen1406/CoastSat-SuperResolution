@@ -1,12 +1,3 @@
-"""
-Inference SRCNN 5-band dành riêng cho Landsat 7.
-
-Mô hình được huấn luyện bằng bài toán tự giám sát:
-60 m giả lập -> bilinear 30 m -> SRCNN -> target L7 gốc 30 m.
-
-Trong CoastSat, mô hình được áp dụng thử nghiệm lên ảnh multispectral L7
-đã được nội suy từ 30 m lên 15 m.
-"""
 
 from pathlib import Path
 
@@ -17,7 +8,7 @@ import torch.nn.functional as F
 
 
 class SRCNN5Band(nn.Module):
-    """SRCNN cổ điển dành cho ảnh Landsat 7 gồm 5 band."""
+    """SRCNN for Landsat 5 bandes."""
 
     def __init__(self):
         super().__init__()
@@ -57,7 +48,6 @@ _DEVICE = None
 
 
 def _get_model():
-    """Nạp model L7 một lần rồi tái sử dụng cho các ảnh tiếp theo."""
     global _MODEL, _DEVICE
 
     if _MODEL is not None:
@@ -75,7 +65,7 @@ def _get_model():
 
     if not model_path.exists():
         raise FileNotFoundError(
-            f"Không tìm thấy model SRCNN L7: {model_path}"
+            f"Do not find SRCNN L7: {model_path}"
         )
 
     try:
@@ -128,36 +118,20 @@ def _get_model():
 
 @torch.inference_mode()
 def enhance_l7(im_ms, reflect_pad=6):
-    """
-    Áp dụng SRCNN dành riêng cho ảnh multispectral Landsat 7.
-
-    Parameters
-    ----------
-    im_ms : numpy.ndarray
-        Ảnh CoastSat có dạng (H, W, 5).
-    reflect_pad : int, default=6
-        Số pixel reflect padding dùng để giảm artefact ở biên ảnh.
-
-    Returns
-    -------
-    numpy.ndarray
-        Ảnh SRCNN có cùng shape và dtype với ảnh đầu vào.
-    """
+    
     image = np.asarray(im_ms)
 
     if image.ndim != 3 or image.shape[2] != 5:
         raise ValueError(
-            "SRCNN L7 yêu cầu ảnh dạng (H, W, 5), "
-            f"nhưng nhận được {image.shape}"
+            "SRCNN L7 require (H, W, 5), "
+            f"But {image.shape}"
         )
 
     original_dtype = image.dtype
     image_float = image.astype(np.float32, copy=True)
 
-    # Ghi nhớ pixel chứa NaN hoặc Inf
     invalid_mask = ~np.isfinite(image_float).all(axis=2)
 
-    # Không đưa NaN/Inf vào mạng
     image_float[~np.isfinite(image_float)] = 0.0
 
     # HWC -> NCHW
@@ -173,7 +147,6 @@ def enhance_l7(im_ms, reflect_pad=6):
 
     height, width = image_float.shape[:2]
 
-    # Reflect padding phải nhỏ hơn kích thước ảnh
     pad = min(
         max(int(reflect_pad), 0),
         height - 1,
@@ -198,7 +171,6 @@ def enhance_l7(im_ms, reflect_pad=6):
     else:
         output = model(tensor)
 
-    # NCHW -> HWC
     enhanced = (
         output.squeeze(0)
         .cpu()
@@ -208,11 +180,10 @@ def enhance_l7(im_ms, reflect_pad=6):
 
     if enhanced.shape != image_float.shape:
         raise RuntimeError(
-            "Sai kích thước đầu ra SRCNN L7: "
+            "Wrong ouput SRCNN L7: "
             f"{image_float.shape} -> {enhanced.shape}"
         )
 
-    # Phục hồi giá trị gốc tại vùng nodata
     enhanced[invalid_mask] = image_float[invalid_mask]
 
     return enhanced.astype(original_dtype, copy=False)
