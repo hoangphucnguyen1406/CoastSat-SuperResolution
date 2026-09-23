@@ -69,7 +69,7 @@ def load_srcnn_l5(
 
     if not checkpoint_path.exists():
         raise FileNotFoundError(
-            f"Không tìm thấy checkpoint SRCNN L5: {checkpoint_path}"
+            f"Donot find checkpoint SRCNN L5: {checkpoint_path}"
         )
 
     if device is None:
@@ -101,7 +101,7 @@ def load_srcnn_l5(
         epoch = checkpoint.get("epoch", "none")
     else:
         state_dict = checkpoint
-        epoch = "không xác định"
+        epoch = "none"
 
     model.load_state_dict(state_dict, strict=True)
     model.eval()
@@ -110,7 +110,7 @@ def load_srcnn_l5(
     _DEVICE = device
 
     print(
-        f"SRCNN L5 đã được load | "
+        f"SRCNN L5 loaded | "
         f"device={device} | epoch={epoch}"
     )
 
@@ -128,14 +128,14 @@ def enhance_l5(
 
     if im_ms.ndim != 3:
         raise ValueError(
-            f"im_ms phải có dạng H x W x 5, "
-            f"nhưng nhận được shape={im_ms.shape}"
+            f"im_ms must be  H x W x 5, "
+            f"but shape={im_ms.shape}"
         )
 
     if im_ms.shape[2] != 5:
         raise ValueError(
-            f"SRCNN L5 yêu cầu đúng 5 band, "
-            f"nhưng nhận được shape={im_ms.shape}"
+            f"SRCNN L5 require 5 bandes, "
+            f"but shape={im_ms.shape}"
         )
 
     original = im_ms.astype(np.float32, copy=True)
