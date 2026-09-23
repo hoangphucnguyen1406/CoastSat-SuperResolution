@@ -34,6 +34,7 @@ from pylab import ginput
 
 # CoastSat modules
 from coastsat import SDS_tools, SDS_preprocess
+from super_resolution.srcnn import enhance_srcnn
 
 np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 
@@ -88,6 +89,15 @@ def extract_shorelines(metadata, settings):
     sitename = settings['inputs']['sitename']
     filepath_data = settings['inputs']['filepath']
     filepath_models = os.path.join(os.getcwd(), 'classification', 'models')
+
+    # Single method selector for the whole pipeline.
+    # If settings['sr_method'] is absent, inherit the value from inputs.
+    sr_method = str(
+        settings.get(
+            'sr_method',
+            settings.get('inputs', {}).get('sr_method', 'bilinear'),
+        )
+    ).lower()
     # initialise output structure
     output = dict([])
     # create a subfolder to store the .jpg images showing the detection
@@ -148,10 +158,17 @@ def extract_shorelines(metadata, settings):
             # get image filename
             fn = SDS_tools.get_filenames(filenames[i],filepath, satname)
             # preprocess image (cloud mask + pansharpening/downsampling)
-            im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = SDS_preprocess.preprocess_single(fn, satname, 
-                                                                                                     settings['cloud_mask_issue'], 
-                                                                                                     settings['pan_off'],
-                                                                                                     settings['s2cloudless_prob'])
+            # preprocess image (cloud mask + pansharpening/downsampling)
+            im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = (
+                SDS_preprocess.preprocess_single(
+                    fn,
+                    satname,
+                    settings["cloud_mask_issue"],
+                    settings["pan_off"],
+                    s2cloudless_prob=settings["s2cloudless_prob"],
+                    sr_method=sr_method,
+                )
+            )
             # get image spatial reference system (epsg code) from metadata dict
             image_epsg = metadata[satname]['epsg'][i]
             
@@ -169,6 +186,27 @@ def extract_shorelines(metadata, settings):
             # skip image if cloud cover is above user-defined threshold
             if cloud_cover > settings['cloud_thresh']:
                 continue
+
+            # Apply SRCNN to L5 after CoastSat preprocessing/cloud filtering,
+            # preserving the placement used in the tested pipeline.
+            if satname == "L5" and sr_method == "srcnn":
+                shape_before = im_ms.shape
+                min_before = np.nanmin(im_ms)
+                max_before = np.nanmax(im_ms)
+
+                im_ms = enhance_srcnn(
+                    im_ms,
+                    satname=satname,
+                    reflect_pad=6,
+                )
+
+                print(
+                    "\nSRCNN L5 applied | "
+                    f"shape: {shape_before} -> {im_ms.shape} | "
+                    f"range: [{min_before:.5f}, {max_before:.5f}] "
+                    f"-> [{np.nanmin(im_ms):.5f}, "
+                    f"{np.nanmax(im_ms):.5f}]"
+                )
 
             # calculate a buffer around the reference shoreline (if any has been digitised)
             im_ref_buffer = create_shoreline_buffer(cloud_mask.shape, georef, image_epsg,
