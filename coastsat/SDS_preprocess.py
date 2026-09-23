@@ -32,11 +32,19 @@ import re
 
 # CoastSat modules
 from coastsat import SDS_tools
+from super_resolution.srcnn import enhance_srcnn
 
 np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
-def preprocess_single(fn, satname, cloud_mask_issue, pan_off, s2cloudless_prob=40):
+def preprocess_single(
+    fn,
+    satname,
+    cloud_mask_issue,
+    pan_off,
+    s2cloudless_prob=40,
+    sr_method="bilinear",
+):
     """
     Reads the image and outputs the pansharpened/down-sampled multispectral bands,
     the georeferencing vector of the image (coordinates of the upper left pixel),
@@ -60,6 +68,10 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, s2cloudless_prob=4
         if True, disable panchromatic sharpening and ignore pan band
     s2cloudless_prob: float [0,100)
         threshold to identify cloud pixels in the s2cloudless probability mask
+    sr_method: str
+        Image reconstruction method. When set to "srcnn", the dedicated
+        Landsat SRCNN is applied after Bilinear resampling to 15 m and,
+        for L7/L8/L9, before panchromatic sharpening.
         
     Returns:
     -----------
@@ -158,8 +170,38 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, s2cloudless_prob=4
         # add zeros to im nodata
         im_nodata = np.logical_or(im_zeros, im_nodata)
         # update cloud mask with all the nodata pixels
-        cloud_mask = np.logical_or(cloud_mask, im_nodata) 
-        
+        cloud_mask = np.logical_or(cloud_mask, im_nodata)
+
+                # ================================================================
+        # SRCNN for L7/L8/L9
+        # CoastSat first performs its standard Bilinear 30 m -> 15 m
+        # resampling during download. SRCNN is then applied here before
+        # panchromatic sharpening, matching the tested pipeline.
+        # ================================================================
+        if str(sr_method).lower() == "srcnn":
+            shape_before = im_ms.shape
+            range_before = (
+                float(np.nanmin(im_ms)),
+                float(np.nanmax(im_ms)),
+            )
+
+            im_ms = enhance_srcnn(
+                im_ms,
+                satname=satname,
+                reflect_pad=6,
+            )
+
+            range_after = (
+                float(np.nanmin(im_ms)),
+                float(np.nanmax(im_ms)),
+            )
+
+            print(
+                f"SRCNN {satname} applied before pansharpening | "
+                f"shape={shape_before}->{im_ms.shape} | "
+                f"range={range_before}->{range_after}"
+            )
+
         # if panchromatic sharpening is turned off
         if pan_off:            
             # ms bands are untouched and the extra image is empty
@@ -713,8 +755,17 @@ def save_jpg(metadata, settings, use_matplotlib=False):
             # image filename
             fn = SDS_tools.get_filenames(filenames[i],filepath, satname)
             # read and preprocess image
-            im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(fn, satname, settings['cloud_mask_issue'],
-                                                                                      settings['pan_off'], s2cloudless_prob)
+            im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(
+                fn,
+                satname,
+                settings['cloud_mask_issue'],
+                settings['pan_off'],
+                s2cloudless_prob,
+                sr_method=settings.get(
+                    'sr_method',
+                    settings.get('inputs', {}).get('sr_method', 'bilinear'),
+                ),
+            )
 
             # compute cloud_cover percentage (with no data pixels)
             cloud_cover_combined = np.divide(sum(sum(cloud_mask.astype(int))),
@@ -811,9 +862,17 @@ def get_reference_sl(metadata, settings):
 
         # read image
         fn = SDS_tools.get_filenames(filenames[i],filepath, satname)
-        im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(fn, satname, settings['cloud_mask_issue'],
-                                                                                  settings['pan_off'],
-                                                                                  settings['s2cloudless_prob'])
+        im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(
+            fn,
+            satname,
+            settings['cloud_mask_issue'],
+            settings['pan_off'],
+            settings['s2cloudless_prob'],
+            sr_method=settings.get(
+                'sr_method',
+                settings.get('inputs', {}).get('sr_method', 'bilinear'),
+            ),
+        )
 
         # compute cloud_cover percentage (with no data pixels)
         cloud_cover_combined = np.divide(sum(sum(cloud_mask.astype(int))),
