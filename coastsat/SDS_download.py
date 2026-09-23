@@ -141,7 +141,7 @@ def retrieve_images(inputs):
     # Select the image reconstruction/resampling method.
     # Bilinear remains the default to preserve the original CoastSat behaviour.
     sr_method = str(inputs.get('sr_method', 'bilinear')).lower()
-    valid_sr_methods = {'bilinear', 'bicubic', 'zhao', 'srcnn'}
+    valid_sr_methods = {'bilinear', 'bicubic', 'zhao', 'srcnn', 'diffpir'}
     if sr_method not in valid_sr_methods:
         raise ValueError(
             f"Unknown sr_method: {sr_method}. "
