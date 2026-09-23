@@ -1,48 +1,10 @@
-"""
-Utilities for loading precomputed DiffPIR x2 outputs into CoastSat.
-
-The expensive diffusion inference is NOT run here. This module only:
-1. matches a CoastSat image with a *_DiffPIR_x2_HWC.npy file,
-2. loads the precomputed 5-band array,
-3. aligns very small size mismatches,
-4. returns an H x W x 5 float32 image.
-"""
 
 import os
 import numpy as np
 
 
-def load_precomputed_diffpir(
-    im_ms,
-    image_filename,
-    satname,
-    diffpir_dir,
-    crop_mode="resize",
-):
-    """
-    Replace a CoastSat multispectral image with a matching precomputed
-    DiffPIR result.
-
-    Parameters
-    ----------
-    im_ms : numpy.ndarray
-        CoastSat multispectral image, expected H x W x 5.
-    image_filename : str
-        CoastSat filename. The first 19 characters are used as timestamp key.
-    satname : str
-        Currently supported: L5 and L7.
-    diffpir_dir : str or path-like
-        Directory containing *_DiffPIR_x2_HWC.npy files.
-    crop_mode : {"resize", "drop_left", "drop_right"}
-        Strategy used only when DiffPIR and CoastSat differ by at most 1 pixel.
-
-    Returns
-    -------
-    numpy.ndarray
-        DiffPIR image aligned to im_ms, float32.
-    str
-        Path of the matched DiffPIR file.
-    """
+def load_precomputed_diffpir(im_ms,image_filename,satname,diffpir_dir,crop_mode="resize",):
+    
     if satname not in ("L5", "L7"):
         raise ValueError(
             f"Precomputed DiffPIR integration currently supports L5/L7 only, "
