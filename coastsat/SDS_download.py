@@ -31,12 +31,36 @@ from skimage import morphology, transform
 from scipy import ndimage
 import time
 
-# CoastSat modules
-from coastsat import SDS_preprocess, SDS_tools, gdal_merge
+# Import SR methods before the GDAL-heavy CoastSat modules on Windows.
+from super_resolution.zhao import zhao_superresolve_tif
 from super_resolution.bicubic import get_resampling_method
+from coastsat import SDS_preprocess, SDS_tools, gdal_merge
 
 np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler('CPLQuietErrorHandler')
+
+
+def _rasters_have_same_grid(fn_a, fn_b, atol=1e-7):
+    """Return True when two rasters have identical size and georeferencing."""
+    ds_a = gdal.Open(fn_a, gdal.GA_ReadOnly)
+    ds_b = gdal.Open(fn_b, gdal.GA_ReadOnly)
+    if ds_a is None or ds_b is None:
+        raise OSError(f"Could not open raster grid(s): {fn_a}, {fn_b}")
+
+    same_size = (
+        ds_a.RasterXSize == ds_b.RasterXSize
+        and ds_a.RasterYSize == ds_b.RasterYSize
+    )
+    same_georef = np.allclose(
+        np.asarray(ds_a.GetGeoTransform(), dtype=float),
+        np.asarray(ds_b.GetGeoTransform(), dtype=float),
+        rtol=0.0,
+        atol=atol,
+    )
+    same_projection = ds_a.GetProjection() == ds_b.GetProjection()
+    ds_a = None
+    ds_b = None
+    return same_size and same_georef and same_projection
 
 def authenticate_and_initialize(project_name):
     """
@@ -114,18 +138,23 @@ def retrieve_images(inputs):
 
     """
 
-    # select interpolation method for image resampling
-    sr_method = inputs.get('sr_method', 'bilinear').lower()
-
-    if sr_method == 'bilinear':
-        sr_resampling_method = 'bilinear'
-    elif sr_method == 'bicubic':
-        sr_resampling_method = get_resampling_method()
-    else:
+    # Select the image reconstruction/resampling method.
+    # Bilinear remains the default to preserve the original CoastSat behaviour.
+    sr_method = str(inputs.get('sr_method', 'bilinear')).lower()
+    valid_sr_methods = {'bilinear', 'bicubic', 'zhao'}
+    if sr_method not in valid_sr_methods:
         raise ValueError(
             f"Unknown sr_method: {sr_method}. "
-            "Available methods at the download stage are 'bilinear' and 'bicubic'."
+            f"Choose one of {sorted(valid_sr_methods)}."
         )
+
+    # Bilinear/Bicubic are direct GDAL resampling modes.
+    # Zhao has its own reconstruction step for Landsat; Bilinear is kept only
+    # where a final grid alignment is required and for Sentinel-2.
+    if sr_method == 'bicubic':
+        interpolation_method = get_resampling_method()
+    else:
+        interpolation_method = 'bilinear'
 
     # check image availabiliy and retrieve list of images
     im_dict_T1, im_dict_T2 = check_images_available(inputs)
@@ -306,12 +335,70 @@ def retrieve_images(inputs):
                 filename_ms = im_fn['ms']
                 all_names.append(im_fn['ms'])
                 
-                # resample ms bands to 15m with the selected interpolation method
-                fn_in = fn_ms
-                fn_target = fn_ms
                 fn_out = os.path.join(fp_ms, im_fn['ms'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method=sr_resampling_method)                
-                
+
+                if sr_method == 'zhao':
+                    # Reconstruct the original 30 m multispectral image on a
+                    # 15 m grid with Zhao et al. Algorithm 1. Bicubic
+                    # interpolation is created internally and used only as the
+                    # prior x_bar; the saved image is the final Zhao solution.
+                    sat_params = inputs.get('zhao_params', {}).get('L5', {})
+                    tau = float(
+                        sat_params.get('tau', inputs.get('zhao_tau', 0.01))
+                    )
+                    kernel_size = int(
+                        sat_params.get(
+                            'kernel_size', inputs.get('zhao_kernel_size', 9)
+                        )
+                    )
+                    kernel_variance = float(
+                        sat_params.get(
+                            'kernel_variance',
+                            inputs.get('zhao_kernel_variance', 3.0),
+                        )
+                    )
+                    device = sat_params.get(
+                        'device', inputs.get('zhao_device', None)
+                    )
+
+                    zhao_info = zhao_superresolve_tif(
+                        fn_in=fn_ms,
+                        fn_out=fn_out,
+                        scale=2,
+                        tau=tau,
+                        kernel_size=kernel_size,
+                        kernel_variance=kernel_variance,
+                        device=device,
+                    )
+
+                    print(
+                        '\nZhao Algorithm 1 applied'
+                        f"\n  Satellite: {satname}"
+                        f"\n  Device: {zhao_info['device']}"
+                        f"\n  Tau: {zhao_info['tau']}"
+                        f"\n  Input shape: {zhao_info['input_shape']}"
+                        f"\n  Output shape: {zhao_info['output_shape']}"
+                        f"\n  Input range: "
+                        f"[{zhao_info['input_min']:.6f}, "
+                        f"{zhao_info['input_max']:.6f}]"
+                        f"\n  Output range: "
+                        f"[{zhao_info['output_min']:.6f}, "
+                        f"{zhao_info['output_max']:.6f}]"
+                        f"\n  Zhao forward MSE: "
+                        f"{zhao_info['zhao_forward_mse']:.8e}"
+                        f"\n  Bicubic forward MSE: "
+                        f"{zhao_info['bicubic_forward_mse']:.8e}"
+                    )
+                else:
+                    # Original CoastSat interpolation (bilinear) or Bicubic.
+                    warp_image_to_target(
+                        fn_ms,
+                        fn_out,
+                        fn_ms,
+                        double_res=True,
+                        resampling_method=interpolation_method,
+                    )
+
                 # resample QA band to 15m with nearest-neighbour interpolation
                 fn_in = fn_QA
                 fn_target = fn_QA
@@ -369,12 +456,72 @@ def retrieve_images(inputs):
                 filename_ms = im_fn['ms']
                 all_names.append(im_fn['ms']) 
                 
-                # resample the ms bands to the pan band with the selected interpolation method (for pan-sharpening later)
                 fn_in = fn_ms
                 fn_target = fn_pan
                 fn_out = os.path.join(fp_ms, im_fn['ms'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method=sr_resampling_method)             
-                
+
+                if sr_method == 'zhao':
+                    # Upsample the 30 m multispectral bands to 15 m with Zhao
+                    # before the standard CoastSat pan-sharpening step.
+                    # Parameters can be set independently for every mission
+                    # from the notebook through inputs['zhao_params'].
+                    sat_params = inputs.get('zhao_params', {}).get(satname, {})
+                    tau = float(sat_params.get('tau', 0.1))
+                    kernel_size = int(sat_params.get('kernel_size', 5))
+                    kernel_variance = float(
+                        sat_params.get('kernel_variance', 1.0)
+                    )
+                    device = sat_params.get('device', None)
+
+                    fn_zhao_tmp = fn_out.replace('.tif', '_zhao_tmp.tif')
+                    zhao_info = zhao_superresolve_tif(
+                        fn_in=fn_ms,
+                        fn_out=fn_zhao_tmp,
+                        scale=2,
+                        tau=tau,
+                        kernel_size=kernel_size,
+                        kernel_variance=kernel_variance,
+                        device=device,
+                    )
+
+                    # The multispectral and panchromatic downloads can differ
+                    # slightly in extent. Use Zhao directly when both grids
+                    # match; otherwise perform only the final grid alignment
+                    # needed by CoastSat's pan-sharpening step.
+                    if _rasters_have_same_grid(fn_zhao_tmp, fn_pan):
+                        os.replace(fn_zhao_tmp, fn_out)
+                        grid_action = 'direct Zhao grid'
+                    else:
+                        warp_image_to_target(
+                            fn_zhao_tmp,
+                            fn_out,
+                            fn_pan,
+                            double_res=False,
+                            resampling_method='bilinear',
+                        )
+                        os.remove(fn_zhao_tmp)
+                        grid_action = 'aligned to PAN grid'
+
+                    print(
+                        f'\nZhao Algorithm 1 applied to {satname}'
+                        f"\n  Device: {zhao_info['device']}"
+                        f'\n  Tau: {tau}'
+                        f'\n  Kernel: {kernel_size}x{kernel_size}'
+                        f'\n  Kernel variance: {kernel_variance}'
+                        f"\n  Input shape: {zhao_info['input_shape']}"
+                        f"\n  Output shape: {zhao_info['output_shape']}"
+                        f'\n  Grid: {grid_action}'
+                    )
+                else:
+                    # Original CoastSat interpolation (bilinear) or Bicubic.
+                    warp_image_to_target(
+                        fn_in,
+                        fn_out,
+                        fn_target,
+                        double_res=False,
+                        resampling_method=interpolation_method,
+                    )
+
                 # resample QA band to the pan band with nearest-neighbour interpolation
                 fn_in = fn_QA
                 fn_target = fn_pan
@@ -440,11 +587,16 @@ def retrieve_images(inputs):
                 filename_ms = im_fn['ms']
                 all_names.append(im_fn['ms']) 
                 
-                # resample the 20m swir band to the 10m ms band with the selected interpolation method
+                # resample the 20m swir band to the 10m ms band
+                # (Bicubic when selected; Bilinear for Bilinear/Zhao modes)
                 fn_in = fn_swir
                 fn_target = fn_ms
                 fn_out = os.path.join(fp_swir, im_fn['swir'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method=sr_resampling_method)             
+                warp_image_to_target(
+                    fn_in, fn_out, fn_target,
+                    double_res=False,
+                    resampling_method=interpolation_method,
+                )             
                 
                 # resample 60m QA band to the 10m ms band with nearest-neighbour interpolation
                 fn_in = fn_QA
