@@ -1,14 +1,3 @@
-"""
-Inference SRCNN 5-band dành riêng cho Landsat 5 trong CoastSat.
-
-Đầu vào:
-    im_ms: numpy array H x W x 5
-    Thứ tự band: Blue, Green, Red, NIR, SWIR1
-
-Đầu ra:
-    numpy array H x W x 5, cùng kích thước và dtype float32.
-"""
-
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +7,7 @@ import torch.nn.functional as F
 
 
 class SRCNN5Band(nn.Module):
-    """SRCNN ba lớp dành cho ảnh Landsat 5 gồm 5 band."""
+    """SRCNN for Landsat 5 bandes."""
 
     def __init__(self):
         super().__init__()
@@ -52,7 +41,6 @@ class SRCNN5Band(nn.Module):
         return self.reconstruction(self.features(x))
 
 
-# Chỉ load model một lần, không load lại cho từng ảnh
 _MODEL = None
 _DEVICE = None
 
@@ -93,7 +81,6 @@ def load_srcnn_l5(
 
     model = SRCNN5Band().to(device)
 
-    # Tương thích với nhiều phiên bản PyTorch
     try:
         checkpoint = torch.load(
             checkpoint_path,
@@ -111,7 +98,7 @@ def load_srcnn_l5(
         and "model_state_dict" in checkpoint
     ):
         state_dict = checkpoint["model_state_dict"]
-        epoch = checkpoint.get("epoch", "không xác định")
+        epoch = checkpoint.get("epoch", "none")
     else:
         state_dict = checkpoint
         epoch = "không xác định"
@@ -136,27 +123,6 @@ def enhance_l5(
     checkpoint_path=None,
     reflect_pad=6,
 ):
-    """
-    Áp dụng SRCNN lên ảnh L5 đã được CoastSat nội suy lên 15 m.
-
-    Parameters
-    ----------
-    im_ms : numpy.ndarray
-        Ảnh H x W x 5 theo thứ tự:
-        Blue, Green, Red, NIR, SWIR1.
-
-    checkpoint_path : str hoặc Path, optional
-        Đường dẫn checkpoint. Nếu None, tự tìm trong:
-        coastsat/models/best_srcnn_l5.pth
-
-    reflect_pad : int
-        Padding phản xạ để tránh viền giả. Mặc định bằng 6.
-
-    Returns
-    -------
-    numpy.ndarray
-        Ảnh SRCNN H x W x 5, dtype float32.
-    """
 
     im_ms = np.asarray(im_ms)
 
@@ -174,10 +140,8 @@ def enhance_l5(
 
     original = im_ms.astype(np.float32, copy=True)
 
-    # Ghi nhớ vị trí NaN/Inf để không làm thay đổi mask
     invalid_mask = ~np.all(np.isfinite(original), axis=2)
 
-    # PyTorch không xử lý NaN ổn định
     clean = np.nan_to_num(
         original,
         nan=0.0,
@@ -185,7 +149,6 @@ def enhance_l5(
         neginf=0.0,
     )
 
-    # HWC -> BCHW
     tensor = (
         torch.from_numpy(clean)
         .permute(2, 0, 1)
@@ -202,8 +165,6 @@ def enhance_l5(
         dtype=torch.float32,
     )
 
-    # Padding bên ngoài bằng reflect.
-    # Sau inference sẽ cắt bỏ đúng phần padding này.
     if reflect_pad > 0:
         tensor = F.pad(
             tensor,
@@ -235,12 +196,11 @@ def enhance_l5(
         .numpy()
     )
 
-    # Giữ nguyên các pixel không hợp lệ của CoastSat
     output[invalid_mask] = original[invalid_mask]
 
     if output.shape != original.shape:
         raise RuntimeError(
-            f"SRCNN làm thay đổi kích thước: "
+            f"SRCNN changes size: "
             f"{original.shape} -> {output.shape}"
         )
 
