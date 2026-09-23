@@ -186,7 +186,6 @@ def enhance_l5(
             reflect_pad:-reflect_pad,
         ]
 
-    # BCHW -> HWC
     output = (
         prediction
         .squeeze(0)
