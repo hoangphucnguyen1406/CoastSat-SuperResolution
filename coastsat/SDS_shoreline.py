@@ -35,6 +35,7 @@ from pylab import ginput
 # CoastSat modules
 from coastsat import SDS_tools, SDS_preprocess
 from super_resolution.srcnn import enhance_srcnn
+from super_resolution.diffpir import load_precomputed_diffpir
 
 np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 
@@ -169,6 +170,54 @@ def extract_shorelines(metadata, settings):
                     sr_method=sr_method,
                 )
             )
+            # ------------------------------------------------------------
+            # Precomputed DiffPIR x2 replacement for Landsat L5/L7
+            # ------------------------------------------------------------
+            if sr_method == "diffpir":
+                if satname not in ("L5", "L7"):
+                    raise ValueError(
+                        "sr_method='diffpir' currently supports only L5/L7 "
+                        f"precomputed outputs, but received {satname}."
+                    )
+
+                diffpir_dir = settings.get(
+                    "diffpir_landsat_dir",
+                    settings.get("inputs", {}).get("diffpir_dir", None),
+                )
+
+                if diffpir_dir is None:
+                    raise ValueError(
+                        "Missing DiffPIR output directory. Set either "
+                        "inputs['diffpir_dir'] or "
+                        "settings['diffpir_landsat_dir']."
+                    )
+
+                shape_before = im_ms.shape
+
+                try:
+                    im_ms, diffpir_path = load_precomputed_diffpir(
+                        im_ms=im_ms,
+                        image_filename=filenames[i],
+                        satname=satname,
+                        diffpir_dir=diffpir_dir,
+                        crop_mode=settings.get("diffpir_crop_mode", "resize"),
+                    )
+                
+                except FileNotFoundError:
+                    print(
+                        f"\nDIFFPIR SKIP {satname} | "
+                        f"no precomputed output for {filenames[i]}"
+                    )
+                    continue
+
+                print(
+                    f"\nDIFFPIR {satname} APPLIED | "
+                    f"file={os.path.basename(os.fspath(filenames[i]))} | "
+                    f"source={os.path.basename(diffpir_path)} | "
+                    f"shape={shape_before}->{im_ms.shape} | "
+                    f"range=({im_ms.min():.6f}, {im_ms.max():.6f})"
+                )
+
             # get image spatial reference system (epsg code) from metadata dict
             image_epsg = metadata[satname]['epsg'][i]
             
